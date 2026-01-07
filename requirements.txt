@@ -11,7 +11,7 @@ pydantic-settings>=2.0.0
 # NOTE: Poppler + Tesseract are SYSTEM deps (conda-forge), not pip.
 # -----------------------
 unstructured>=0.12.0
-unstructured-inference>=0.7.0
+# unstructured-inference>=0.7.0
 pdf2image>=1.16.0
 pillow>=9.0.0
 pytesseract>=0.3.10
