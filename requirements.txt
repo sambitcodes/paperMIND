@@ -9,11 +9,8 @@ pydantic-settings>=2.0
 # -----------------------
 # PDF ingestion (Unstructured, FAST only)
 # -----------------------
-unstructured>=0.13.0
-pdfminer.six==20231228
-pillow>=9.0
-pdf2image>=1.16
-pytesseract>=0.3.10
+pypdf>=4.0.0
+
 
 # -----------------------
 # Vector DB
@@ -43,4 +40,3 @@ scikit-learn>=1.4
 # Reliability
 # -----------------------
 tenacity>=8.2
-pi-heif>=0.13.0
