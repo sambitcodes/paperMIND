@@ -15,7 +15,7 @@ def initialize_session_state():
         st.session_state.use_rag = True
         st.session_state.last_sources = []
         st.session_state.top_k = 5
-        st.session_state.temperature = 0.7
+        st.session_state.temperature = 0.2
         st.session_state.collection_name = None
         
         # Initialize LLM orchestrator
