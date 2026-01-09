@@ -43,3 +43,4 @@ scikit-learn>=1.4
 # Reliability
 # -----------------------
 tenacity>=8.2
+pi-heif>=0.13.0
