@@ -1,12 +1,10 @@
 """
-LLM orchestrator for Groq models + extractive QA (SciBERTModel).
+LLM orchestrator for Groq models + local extractive models.
 
-Keeps the existing API expected by the app:
-- get_available_models()
-- get_model()
-- get_model_info()
-- generate_response()
-- stream_response()  (Groq streams; SciBERT yields once)
+Models supported:
+- Groq chat models (streaming supported)
+- Local extractive QA (RoBERTa SQuAD2) via SciBERTModel(mode="qa")
+- Local SciBERT-weights extractive selection via SciBERTModel(mode="scibert_rank")
 """
 
 import logging
@@ -28,16 +26,43 @@ class LLMOrchestrator:
 
         self.client = Groq(api_key=api_key)
 
+        # Register available models here
         self._models: Dict[str, Dict] = {
-            "llama-3.3-70b-versatile": {"provider": "groq", "type": "chat", "id": "llama-3.3-70b-versatile"},
-            "groq/compound": {"provider": "groq", "type": "agentic_system", "id": "groq/compound"},
-            "openai/gpt-oss-120b": {"provider": "groq", "type": "moe", "id": "openai/gpt-oss-120b"},
-            # New: extractive QA option (uses your existing scibert_model.py)
-            "scibert-extractive": {"provider": "hf", "type": "extractive", "id": "scibert-extractive"},
+            "llama-3.3-70b-versatile": {
+                "provider": "groq",
+                "type": "chat",
+                "id": "llama-3.3-70b-versatile",
+            },
+            "groq/compound": {
+                "provider": "groq",
+                "type": "agentic_system",
+                "id": "groq/compound",
+            },
+            "openai/gpt-oss-120b": {
+                "provider": "groq",
+                "type": "moe",
+                "id": "openai/gpt-oss-120b",
+            },
+            # Local extractive models
+            "roberta-extractive": {
+                "provider": "hf",
+                "type": "extractive_qa",
+                "id": "roberta-extractive",
+            },
+            "scibert-extractive": {
+                "provider": "hf",
+                "type": "extractive_scibert",
+                "id": "scibert-extractive",
+            },
         }
 
         self.current_model_name = "llama-3.3-70b-versatile"
-        self._scibert: Optional[SciBERTModel] = None
+
+        # Lazy-loaded local models
+        self._roberta_qa: Optional[SciBERTModel] = None
+        self._scibert_rank: Optional[SciBERTModel] = None
+
+    # ---------- Model metadata / selection ----------
 
     def get_available_models(self) -> List[str]:
         return list(self._models.keys())
@@ -50,11 +75,28 @@ class LLMOrchestrator:
 
     def get_model_info(self) -> Dict:
         name = self.current_model_name
+
+        if name == "roberta-extractive":
+            if self._roberta_qa is None:
+                self._roberta_qa = SciBERTModel(
+                    mode="qa",
+                    model_name="deepset/roberta-large-squad2",
+                    device=-1,
+                )
+            return self._roberta_qa.get_model_info()
+
         if name == "scibert-extractive":
-            if self._scibert is None:
-                self._scibert = SciBERTModel()
-            return self._scibert.get_model_info()
+            if self._scibert_rank is None:
+                self._scibert_rank = SciBERTModel(
+                    mode="scibert_rank",
+                    model_name="allenai/scibert_scivocab_uncased",
+                    device=-1,
+                )
+            return self._scibert_rank.get_model_info()
+
         return self._models.get(name, {})
+
+    # ---------- Internal: build Groq messages ----------
 
     def _build_messages(self, prompt: str, context: Optional[str] = None) -> List[Dict[str, str]]:
         system_msg = "You are a helpful research assistant."
@@ -70,6 +112,8 @@ class LLMOrchestrator:
         messages.append({"role": "user", "content": prompt})
         return messages
 
+    # ---------- Core generation API used by app ----------
+
     def generate_response(
         self,
         prompt: str,
@@ -80,35 +124,57 @@ class LLMOrchestrator:
     ) -> str:
         model_name = (model_name or self.current_model_name).strip()
 
-        if model_name == "scibert-extractive":
-            if self._scibert is None:
-                self._scibert = SciBERTModel()
-            out = self._scibert.generate(
+        # Local: RoBERTa extractive QA (true QA head)
+        if model_name == "roberta-extractive":
+            if self._roberta_qa is None:
+                self._roberta_qa = SciBERTModel(
+                    mode="qa",
+                    model_name="deepset/roberta-large-squad2",
+                    device=-1,
+                )
+            out = self._roberta_qa.generate(
                 prompt=prompt,
                 context=context,
                 temperature=0.0,
-                max_tokens=int(max_tokens),
+                max_tokens=min(int(max_tokens), 512),
                 stream=False,
             )
-            # BaseLLM allows generator, but we asked stream=False so it's str.
             return str(out)
 
+        # Local: SciBERT weights extractive selection (no QA head)
+        if model_name == "scibert-extractive":
+            if self._scibert_rank is None:
+                self._scibert_rank = SciBERTModel(
+                    mode="scibert_rank",
+                    model_name="allenai/scibert_scivocab_uncased",
+                    device=-1,
+                )
+            out = self._scibert_rank.generate(
+                prompt=prompt,
+                context=context,
+                temperature=0.0,
+                max_tokens=min(int(max_tokens), 512),
+                stream=False,
+            )
+            return str(out)
+
+        # Groq models
         if model_name not in self._models:
             raise ValueError(f"Unknown model: {model_name}")
 
         messages = self._build_messages(prompt=prompt, context=context)
 
-        resp = self.client.chat.completions.create(
-            model=self._models[model_name]["id"],
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
         try:
+            resp = self.client.chat.completions.create(
+                model=self._models[model_name]["id"],
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
             return resp.choices[0].message.content or ""
-        except Exception:
-            return ""
+        except Exception as e:
+            logger.error(f"Groq chat completion error: {e}")
+            raise
 
     def stream_response(
         self,
@@ -120,25 +186,18 @@ class LLMOrchestrator:
     ) -> Iterable[str]:
         model_name = (model_name or self.current_model_name).strip()
 
-        # SciBERT extractive: yield once (still compatible with streaming UI)
-        if model_name == "scibert-extractive":
-            if self._scibert is None:
-                self._scibert = SciBERTModel()
-            out = self._scibert.generate(
+        # Local models: yield once so your streaming UI still works
+        if model_name in ("roberta-extractive", "scibert-extractive"):
+            yield self.generate_response(
                 prompt=prompt,
-                context=context,
+                model_name=model_name,
                 temperature=0.0,
-                max_tokens=int(max_tokens),
-                stream=True,
+                context=context,
+                max_tokens=max_tokens,
             )
-            # out can be a generator (per BaseLLM)
-            if hasattr(out, "__iter__") and not isinstance(out, str):
-                for x in out:
-                    yield str(x)
-            else:
-                yield str(out)
             return
 
+        # Groq streaming
         if model_name not in self._models:
             raise ValueError(f"Unknown model: {model_name}")
 

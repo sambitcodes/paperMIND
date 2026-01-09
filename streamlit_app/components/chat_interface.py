@@ -12,7 +12,6 @@ from typing import Iterable
 import re
 
 import streamlit as st
-
 from streamlit_app.session_state import get_session_state
 
 
@@ -107,7 +106,6 @@ def render_chat() -> None:
                 # ---------- RAG mode ----------
                 if use_rag and rag_pipeline is not None:
                     retrieval = rag_pipeline.retriever.retrieve(prompt)
-
                     docs = retrieval.documents or []
                     citations = retrieval.citations or []
                     context = "\n\n".join([d for d in docs if d]).strip()
