@@ -211,14 +211,14 @@ If your entry file differs, run that file instead.
 For questions, issues, or collaboration:
 
 - **Project:** PaperMIND
-- **Live app:** https://paperminded.streamlit.app/
+- **Live app:** PaperMIND [https://paperminded.streamlit.app/]
 
 Add your preferred contact details below (recommended):
 
-- Name:
-- Email:
-- GitHub:
-- LinkedIn:
+- Name: Sambit Chakraborty
+- Email: sambitmaths123@gmail.com
+- GitHub: https://github.com/sambitcodes
+- LinkedIn: https://www.linkedin.com/in/samchak/
 
 ---
 
