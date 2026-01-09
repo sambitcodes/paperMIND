@@ -5,7 +5,7 @@ Retrieves relevant chunks and tracks their sources.
 """
 
 import logging
-from typing import List
+from typing import List, Tuple, Any
 
 from src.indexing.vector_store import VectorStoreManager
 from src.indexing.embedding_models import CachedEmbedder
@@ -74,6 +74,7 @@ class RAGRetriever:
         self.vector_store = vector_store
         self.embedder = embedder
         self.top_k = int(top_k)
+
         # Kept for compatibility, but not used for hard filtering currently.
         self.similarity_threshold = float(similarity_threshold)
 
@@ -84,6 +85,7 @@ class RAGRetriever:
         query_embedding = self.embedder.embed_query(query)
         logger.info(f"Embedded query: {query[:100]}...")
 
+        # Expecting: (doc_ids, metadatas, distances)
         doc_ids, metadatas, distances = self.vector_store.query(
             query_embedding=query_embedding,
             n_results=self.top_k,
@@ -102,20 +104,21 @@ class RAGRetriever:
         # Keep all top_k results (stable behavior across Chroma distance metrics).
         for doc_id, metadata, distance in aligned:
             kept_ids.append(doc_id)
-            kept_distances.append(distance)
+            kept_distances.append(float(distance))
+
             citations.append(
                 Citation(
-                    document=metadata.get("document", "Unknown"),
-                    page_number=int(metadata.get("page_number", 0)),
-                    section=metadata.get("section", "Unknown"),
-                    subsection=metadata.get("subsection", "Unknown"),
-                    chunk_id=doc_id,
+                    document=str(metadata.get("document", "Unknown")),
+                    page_number=int(metadata.get("page_number", 0) or 0),
+                    section=str(metadata.get("section", "Unknown")),
+                    subsection=str(metadata.get("subsection", "Unknown")),
+                    chunk_id=str(doc_id),
                 )
             )
 
         # Fetch documents by ids
         documents: List[str] = []
-        if kept_ids and self.vector_store.collection:
+        if kept_ids and getattr(self.vector_store, "collection", None):
             results = self.vector_store.collection.get(ids=kept_ids)
             documents = results.get("documents", []) or []
 

@@ -1,10 +1,12 @@
 """
 Vector store abstraction using ChromaDB.
+
 Persists and retrieves embeddings with metadata.
 """
+
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -19,8 +21,7 @@ class VectorStoreManager:
         self.persist_dir = persist_dir or Path("./data/chroma_db")
         self.persist_dir.mkdir(parents=True, exist_ok=True)
 
-        # New (non-deprecated) persistent client.
-        # Legacy chroma_db_impl="duckdb+parquet" is deprecated. [web:156][web:170]
+        # Persistent client (recommended).
         self.client = chromadb.PersistentClient(
             path=str(self.persist_dir),
             settings=ChromaSettings(anonymized_telemetry=False),
@@ -68,26 +69,26 @@ class VectorStoreManager:
         self,
         query_embedding: List[float],
         n_results: int = 5,
-    ) -> Tuple[List[str], List[List[Dict]], List[List[float]]]:
+    ) -> Tuple[List[str], List[Dict], List[float]]:
         """
         Query the vector store.
 
         Returns:
-            Tuple of (document_ids, metadatas, distances)
+            Tuple of (document_ids, metadatas, distances) for the single query.
         """
         if not self.collection:
             raise ValueError("Collection not created.")
 
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=n_results,
+            n_results=int(n_results),
         )
 
-        return (
-            results["ids"][0] if results.get("ids") else [],
-            results["metadatas"][0] if results.get("metadatas") else [],
-            results["distances"][0] if results.get("distances") else [],
-        )
+        ids = results["ids"][0] if results.get("ids") else []
+        metadatas = results["metadatas"][0] if results.get("metadatas") else []
+        distances = results["distances"][0] if results.get("distances") else []
+
+        return ids, metadatas, distances
 
     def delete_collection(self, name: str) -> None:
         """Delete a collection."""
@@ -96,6 +97,7 @@ class VectorStoreManager:
             logger.info(f"Deleted collection: {name}")
         except Exception as e:
             logger.error(f"Error deleting collection: {e}")
+            raise
 
     def list_collections(self) -> List[str]:
         """List all collections."""
