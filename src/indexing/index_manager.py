@@ -42,7 +42,12 @@ class IndexManager:
         4. Generate embeddings
         5. Store in vector DB
         """
-        logger.info(f"Starting indexing for {pdf_path}")
+        # Hard guard: never pass None/empty to Chroma collection creation
+        collection_name = (collection_name or "").strip()
+        if not collection_name:
+            raise ValueError("collection_name cannot be empty/None.")
+
+        logger.info(f"Starting indexing for {pdf_path} into '{collection_name}'")
 
         # Step 1: Process PDF
         elements, metadata = self.pdf_processor.process_pdf(pdf_path)
@@ -69,9 +74,8 @@ class IndexManager:
         logger.info(f"Generated {len(embeddings)} embeddings")
 
         # Step 5: Prepare metadata
-        chunk_metadatas = []
         pdf_name = Path(pdf_path).name
-
+        chunk_metadatas = []
         for c in chunks:
             chunk_metadatas.append(
                 {
