@@ -45,3 +45,4 @@ scikit-learn
 # Reliability
 # -----------------------
 tenacity
+pdfminer
