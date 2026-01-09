@@ -1,111 +1,82 @@
 """
-Advanced PDF processing using Unstructured.
-Handles multi-column layouts, tables, and references.
-"""
-import logging
-from pathlib import Path
-from typing import List, Tuple
-from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.auto import partition
-from unstructured.documents.elements import (
-    Element,
-    Title,
-    NarrativeText,
-    ListItem,
-    Table,
-)
+Lightweight PDF processing using PyPDF (pure Python).
 
+Goal:
+- Avoid unstructured/unstructured_inference/cv2/libGL conflicts on Streamlit Cloud.
+- Provide a minimal "element" object with .text and .metadata.page_number
+  so the rest of the pipeline (chunker -> embeddings -> vector store) stays intact.
+"""
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class ElementMetadata:
+    page_number: int = 1
+
+
+@dataclass
+class SimpleElement:
+    text: str
+    metadata: ElementMetadata
+
+
 class PDFProcessor:
-    """Process research papers and extract structured content."""
-    
-    def __init__(self, extract_images: bool = True, extract_tables: bool = True):
+    """Process research papers and extract text by page (fast, embedded-text PDFs)."""
+
+    def __init__(self, extract_images: bool = False, extract_tables: bool = False):
+        # Kept for API compatibility with your existing IndexManager usage.
         self.extract_images = extract_images
         self.extract_tables = extract_tables
-    
-    def process_pdf(self, pdf_path: str) -> Tuple[List[Element], dict]:
-        """
-        Process PDF and return elements with metadata.
-        
-        Args:
-            pdf_path: Path to PDF file
-        
-        Returns:
-            Tuple of (elements, metadata)
-        """
+
+    def process_pdf(self, pdf_path: str) -> Tuple[List[SimpleElement], dict]:
         pdf_path = Path(pdf_path)
-        
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
-        
-        try:
-            # Use partition_pdf for better handling of complex layouts
-            elements = partition_pdf(
-                str(pdf_path),
-                infer_table_structure=self.extract_tables,
-                strategy="fast",  # High-resolution strategy
-                extract_image_block_types=["Image"] if self.extract_images else [],
-            )
-            
-            logger.info(f"Extracted {len(elements)} elements from {pdf_path.name}")
-            
-            metadata = {
-                "filename": pdf_path.name,
-                "filepath": str(pdf_path),
-                "total_elements": len(elements),
-            }
-            
-            return elements, metadata
-            
-        except Exception as e:
-            logger.error(f"Error processing PDF {pdf_path}: {e}")
-            raise
-    
+
+        reader = PdfReader(str(pdf_path))
+
+        elements: List[SimpleElement] = []
+        for page_idx, page in enumerate(reader.pages, start=1):
+            text = (page.extract_text() or "").strip()
+            if not text:
+                continue
+            elements.append(SimpleElement(text=text, metadata=ElementMetadata(page_number=page_idx)))
+
+        metadata = {
+            "filename": pdf_path.name,
+            "filepath": str(pdf_path),
+            "strategy_used": "pypdf_text",
+            "total_pages": len(reader.pages),
+            "total_elements": len(elements),
+        }
+
+        logger.info(f"Extracted {len(elements)} page-elements from {pdf_path.name}")
+        return elements, metadata
+
     def extract_text_by_page(self, pdf_path: str) -> dict:
-        """Extract text organized by page number."""
         elements, _ = self.process_pdf(pdf_path)
-        
         page_text = {}
-        current_page = 1
-        
-        for element in elements:
-            page_num = getattr(element, "metadata", {}).get("page_number", 1)
-            
-            if page_num not in page_text:
-                page_text[page_num] = []
-            
-            page_text[page_num].append(element.text)
-        
+        for el in elements:
+            page_num = getattr(el.metadata, "page_number", 1)
+            page_text.setdefault(page_num, []).append(el.text)
         return page_text
-    
+
     def extract_structured(self, pdf_path: str) -> dict:
-        """Extract structured content with element types."""
+        # With pypdf we don’t get semantic element types; we return everything as narrative.
         elements, metadata = self.process_pdf(pdf_path)
-        
-        structured = {
+        return {
             "metadata": metadata,
             "titles": [],
             "headings": [],
             "sections": [],
             "tables": [],
-            "narrative": [],
+            "narrative": [el.text for el in elements],
         }
-        
-        for element in elements:
-            if isinstance(element, Title):
-                structured["titles"].append(element.text)
-            elif getattr(element, "category", None) in ("Header", "Heading"):
-                structured["headings"].append(element.text)
-            elif isinstance(element, Table):
-                structured["tables"].append({
-                    "content": element.text,
-                    "html": getattr(element, "metadata", {}).get("html_table", ""),
-                })
-            elif isinstance(element, NarrativeText):
-                structured["narrative"].append(element.text)
-            elif isinstance(element, ListItem):
-                structured["narrative"].append(f"• {element.text}")
-        
-        return structured
