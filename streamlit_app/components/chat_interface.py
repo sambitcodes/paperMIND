@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Generator, Iterable, Union
 
 import streamlit as st
+import re
 from src.qa_pipeline.response_formatter import ResponseFormatter
 from streamlit_app.session_state import get_session_state
 
@@ -43,15 +44,39 @@ def _stream_to_markdown(stream: Iterable[str], placeholder) -> str:
             placeholder.markdown(acc)
     return acc
 
+def _normalize_latex(md: str) -> str:
+    """
+    Streamlit's Markdown supports math with $...$ (inline) and $$...$$ (block). [web:388]
+    Many LLMs return \\( ... \\) and \\[ ... \\], so normalize those.
+    """
+    if not md:
+        return ""
+
+    # Convert \( \) -> $ $
+    md = md.replace(r"\(", "$").replace(r"\)", "$")
+
+    # Convert \[ \] -> $$ $$ (block)
+    md = md.replace(r"\[", "$$").replace(r"\]", "$$")
+
+    # Make block math more robust: ensure $$ are on their own lines
+    # so KaTeX parsing is more reliable in markdown renderers.
+    md = re.sub(r"(?<!\n)\$\$", "\n$$", md)
+    md = re.sub(r"\$\$(?!\n)", "$$\n", md)
+
+    return md
 
 def render_chat():
     state = get_session_state()
 
     # Render history (assistant messages will include stored sources if present)
     for msg in state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant" and msg.get("sources"):
+        role = msg.get("role", "assistant")
+        content = msg.get("content", "")
+
+        with st.chat_message(role):
+            st.markdown(_normalize_latex(content))
+
+            if role == "assistant" and msg.get("sources"):
                 with st.expander("View sources", expanded=False):
                     _render_sources_list(msg["sources"])
 
@@ -69,7 +94,7 @@ def render_chat():
     # Add user message
     state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(_normalize_latex(prompt))
 
     # Generate assistant response
     with st.chat_message("assistant"):
@@ -84,9 +109,10 @@ def render_chat():
                         top_k=state.top_k,
                     )
 
-                    answer = result.get("answer", "").strip() or "I couldn't generate an answer."
+                    answer = (result.get("answer", "") or "").strip() or "I couldn't generate an answer."
                     sources = result.get("sources", []) or []
-                    st.markdown(answer)
+
+                    st.markdown(_normalize_latex(answer))
 
                     if sources:
                         with st.expander("View sources", expanded=False):
@@ -112,9 +138,8 @@ def render_chat():
                     context=None,
                 )
                 answer = (answer or "").strip() or "I couldn't generate an answer."
-                st.markdown(answer)
+                st.markdown(_normalize_latex(answer))
 
-                # No sources in LLM-only mode
                 state.messages.append(
                     {
                         "role": "assistant",
@@ -128,7 +153,6 @@ def render_chat():
                 st.error(err)
                 state.messages.append({"role": "assistant", "content": err, "sources": []})
 
-
 def _render_sources_list(sources: list[dict]) -> None:
     """Render a list of sources inside an expander."""
     if not sources:
@@ -137,12 +161,14 @@ def _render_sources_list(sources: list[dict]) -> None:
 
     for i, s in enumerate(sources, start=1):
         st.markdown(
-            f"**Source {i}**  \n"
-            f"- Document: {s.get('document','Unknown')}  \n"
-            f"- Page: {s.get('page_number','?')}  \n"
-            f"- Section: {s.get('section','')}  \n"
-            f"- Subsection: {s.get('subsection','')}  \n"
-            f"- Chunk ID: `{s.get('chunk_id','')}`"
+            _normalize_latex(
+                f"**Source {i}**  \n"
+                f"- Document: {s.get('document','Unknown')}  \n"
+                f"- Page: {s.get('page_number','?')}  \n"
+                f"- Section: {s.get('section','')}  \n"
+                f"- Subsection: {s.get('subsection','')}  \n"
+                f"- Chunk ID: `{s.get('chunk_id','')}`"
+            )
         )
         if i != len(sources):
             st.divider()
