@@ -10,7 +10,7 @@ pydantic-settings
 # PDF ingestion (Unstructured)
 # NOTE: Poppler + Tesseract are SYSTEM deps (conda-forge), not pip.
 # -----------------------
-unstructured
+unstructured[pdf]
 # unstructured-inference>=0.7.0
 # pdf2image
 pillow
@@ -45,4 +45,4 @@ scikit-learn
 # Reliability
 # -----------------------
 tenacity
-pdfminer
+# pdfminer
