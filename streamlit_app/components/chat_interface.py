@@ -4,157 +4,55 @@ Chat interface component for PaperMind (defensive + streaming).
 - Does NOT assume st.session_state.rag_pipeline exists.
 - If RAG pipeline is missing (no PDF indexed yet), it falls back to LLM-only mode.
 - Streams responses when supported (generator output).
-- Uses st.session_state.get(...) to avoid KeyErrors in multipage apps.
 """
+
 from __future__ import annotations
 
-from typing import Generator, Iterable, Union
+from typing import Iterable
+import re
 
 import streamlit as st
-import re
-from src.qa_pipeline.response_formatter import ResponseFormatter
+
 from streamlit_app.session_state import get_session_state
 
 
 def _ensure_messages_initialized() -> None:
     if "messages" not in st.session_state:
-        st.session_state.messages = []
+        st.session_state["messages"] = []
 
 
-def _append_message(role: str, content: str) -> None:
-    _ensure_messages_initialized()
-    st.session_state.messages.append({"role": role, "content": content})
+def _normalize_latex(md: str) -> str:
+    """
+    Streamlit Markdown supports $...$ and $$...$$ for math. [web:388]
+    Many LLMs return \\(\\) and \\[\\], so normalize those.
+    """
+    if not md:
+        return ""
 
+    md = md.replace(r"\(", "$").replace(r"\)", "$")
+    md = md.replace(r"\[", "$$").replace(r"\]", "$$")
 
-def _is_stream(obj) -> bool:
-    # Accept generators/iterables of strings (GroqModel.generate(stream=True) yields chunks).
-    # Avoid treating plain strings as iterables.
-    return obj is not None and not isinstance(obj, str) and hasattr(obj, "__iter__")
+    # Put $$ on separate lines for better rendering stability.
+    md = re.sub(r"(?<!\n)\$\$", "\n$$", md)
+    md = re.sub(r"\$\$(?!\n)", "$$\n", md)
+    return md
 
 
 def _stream_to_markdown(stream: Iterable[str], placeholder) -> str:
     """
     Stream chunks into a single markdown element and return the final text.
-    Uses st.empty() placeholder pattern so the text stays in one bubble. [web:43]
+    Uses st.empty() placeholder pattern. [web:43]
     """
     acc = ""
     for chunk in stream:
         if chunk:
             acc += str(chunk)
-            placeholder.markdown(acc)
+            placeholder.markdown(_normalize_latex(acc + "▌"))
+    placeholder.markdown(_normalize_latex(acc))
     return acc
 
-def _normalize_latex(md: str) -> str:
-    """
-    Streamlit's Markdown supports math with $...$ (inline) and $$...$$ (block). [web:388]
-    Many LLMs return \\( ... \\) and \\[ ... \\], so normalize those.
-    """
-    if not md:
-        return ""
-
-    # Convert \( \) -> $ $
-    md = md.replace(r"\(", "$").replace(r"\)", "$")
-
-    # Convert \[ \] -> $$ $$ (block)
-    md = md.replace(r"\[", "$$").replace(r"\]", "$$")
-
-    # Make block math more robust: ensure $$ are on their own lines
-    # so KaTeX parsing is more reliable in markdown renderers.
-    md = re.sub(r"(?<!\n)\$\$", "\n$$", md)
-    md = re.sub(r"\$\$(?!\n)", "$$\n", md)
-
-    return md
-
-def render_chat():
-    state = get_session_state()
-
-    # Render history (assistant messages will include stored sources if present)
-    for msg in state.messages:
-        role = msg.get("role", "assistant")
-        content = msg.get("content", "")
-
-        with st.chat_message(role):
-            st.markdown(_normalize_latex(content))
-
-            if role == "assistant" and msg.get("sources"):
-                with st.expander("View sources", expanded=False):
-                    _render_sources_list(msg["sources"])
-
-    # Guard rails: RAG requested but not ready
-    if state.use_rag:
-        if "rag_pipeline" not in st.session_state or st.session_state.rag_pipeline is None:
-            st.info("RAG is enabled, but no index is loaded yet. Upload + index a PDF from the sidebar.")
-        elif not getattr(state, "collection_name", None):
-            st.info("RAG is enabled, but no collection is selected. Index a PDF from the sidebar.")
-
-    prompt = st.chat_input("Ask a question about the indexed paper…")
-    if not prompt:
-        return
-
-    # Add user message
-    state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(_normalize_latex(prompt))
-
-    # Generate assistant response
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                # ---- RAG mode ----
-                if state.use_rag and ("rag_pipeline" in st.session_state) and st.session_state.rag_pipeline:
-                    result = st.session_state.rag_pipeline.answer(
-                        question=prompt,
-                        model_name=state.current_model,
-                        temperature=state.temperature,
-                        top_k=state.top_k,
-                    )
-
-                    answer = (result.get("answer", "") or "").strip() or "I couldn't generate an answer."
-                    sources = result.get("sources", []) or []
-
-                    st.markdown(_normalize_latex(answer))
-
-                    if sources:
-                        with st.expander("View sources", expanded=False):
-                            _render_sources_list(sources)
-                    else:
-                        st.caption("No sources retrieved for this question.")
-
-                    # Persist assistant message + its sources
-                    state.messages.append(
-                        {
-                            "role": "assistant",
-                            "content": answer,
-                            "sources": sources,
-                        }
-                    )
-                    return
-
-                # ---- LLM-only mode ----
-                answer = state.llm_orchestrator.generate_response(
-                    prompt=prompt,
-                    model_name=state.current_model,
-                    temperature=state.temperature,
-                    context=None,
-                )
-                answer = (answer or "").strip() or "I couldn't generate an answer."
-                st.markdown(_normalize_latex(answer))
-
-                state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                        "sources": [],
-                    }
-                )
-
-            except Exception as e:
-                err = f"Error generating response: {e}"
-                st.error(err)
-                state.messages.append({"role": "assistant", "content": err, "sources": []})
 
 def _render_sources_list(sources: list[dict]) -> None:
-    """Render a list of sources inside an expander."""
     if not sources:
         st.write("No sources available.")
         return
@@ -172,3 +70,104 @@ def _render_sources_list(sources: list[dict]) -> None:
         )
         if i != len(sources):
             st.divider()
+
+
+def render_chat():
+    state = get_session_state()
+    _ensure_messages_initialized()
+
+    # Render history
+    for msg in st.session_state["messages"]:
+        role = msg.get("role", "assistant")
+        content = msg.get("content", "")
+
+        with st.chat_message(role):
+            st.markdown(_normalize_latex(content))
+
+            if role == "assistant" and msg.get("sources"):
+                with st.expander("View sources", expanded=False):
+                    _render_sources_list(msg["sources"])
+
+    prompt = st.chat_input("Ask a question about the indexed paper…")
+    if not prompt:
+        return
+
+    # User bubble
+    st.session_state["messages"].append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(_normalize_latex(prompt))
+
+    # Assistant bubble (streaming)
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                message_placeholder = st.empty()
+
+                # ---------- RAG mode ----------
+                if (
+                    bool(st.session_state.get("use_rag", True))
+                    and st.session_state.get("rag_pipeline") is not None
+                ):
+                    # Use retriever for context + citations
+                    rag = st.session_state["rag_pipeline"]
+                    retrieval = rag.retriever.retrieve(prompt)
+
+                    docs = retrieval.documents or []
+                    citations = retrieval.citations or []
+
+                    context = "\n\n".join([d for d in docs if d]).strip()
+
+                    sources = []
+                    for c in citations:
+                        sources.append(
+                            {
+                                "document": c.document,
+                                "page_number": c.page_number,
+                                "section": c.section,
+                                "subsection": c.subsection,
+                                "chunk_id": c.chunk_id,
+                            }
+                        )
+
+                    if context:
+                        stream = state.llm_orchestrator.stream_response(
+                            prompt=(
+                                "Use the following context to answer the question.\n\n"
+                                f"Context:\n{context}\n\n"
+                                f"Question:\n{prompt}\n"
+                            ),
+                            model_name=state.current_model,
+                            temperature=state.temperature,
+                            context=None,
+                        )
+                        final_text = _stream_to_markdown(stream, message_placeholder)
+                    else:
+                        final_text = "No sources retrieved for this question."
+                        message_placeholder.markdown(final_text)
+
+                    if sources:
+                        with st.expander("View sources", expanded=False):
+                            _render_sources_list(sources)
+
+                    st.session_state["messages"].append(
+                        {"role": "assistant", "content": final_text, "sources": sources}
+                    )
+                    return
+
+                # ---------- LLM-only mode ----------
+                stream = state.llm_orchestrator.stream_response(
+                    prompt=prompt,
+                    model_name=state.current_model,
+                    temperature=state.temperature,
+                    context=None,
+                )
+                final_text = _stream_to_markdown(stream, message_placeholder)
+
+                st.session_state["messages"].append(
+                    {"role": "assistant", "content": final_text, "sources": []}
+                )
+
+            except Exception as e:
+                err = f"Error generating response: {e}"
+                st.error(err)
+                st.session_state["messages"].append({"role": "assistant", "content": err, "sources": []})

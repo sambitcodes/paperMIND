@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,10 @@ class RAGPipeline:
         docs = retrieval.documents or []
         citations = retrieval.citations or []
 
-        context = "\n\n".join([d for d in docs if d])
+        context = "\n\n".join([d for d in docs if d]).strip()
 
         # If nothing retrieved, still answer (LLM-only fallback) but keep sources empty
-        if not context.strip():
+        if not context:
             answer = self.llm_orchestrator.generate_response(
                 prompt=question,
                 model_name=model_name,
@@ -48,7 +48,7 @@ class RAGPipeline:
                 "retrieved_docs_count": 0,
             }
 
-        # Build a lightweight sources payload for UI
+        # Build sources payload
         sources: List[dict] = []
         for c in citations:
             sources.append(
@@ -61,17 +61,18 @@ class RAGPipeline:
                 }
             )
 
-        # Ask LLM with context
+        # Ask LLM with context (inlined in prompt)
         prompt = (
             "Use the following context to answer the question.\n\n"
             f"Context:\n{context}\n\n"
             f"Question:\n{question}\n"
         )
+
         answer = self.llm_orchestrator.generate_response(
             prompt=prompt,
             model_name=model_name,
             temperature=temperature,
-            context=None,  # context already in prompt
+            context=None,
         )
 
         return {

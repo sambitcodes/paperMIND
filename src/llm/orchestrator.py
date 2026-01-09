@@ -3,14 +3,15 @@ LLM orchestrator for Groq models.
 
 Provides:
 - Model registry
-- Simple generate_response() interface used by chat + RAG pipeline
+- generate_response() for non-streaming
+- stream_response() for streaming
 """
 
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Iterable
 
-from groq import Groq  # pip install groq
+from groq import Groq
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class LLMOrchestrator:
                 "id": "openai/gpt-oss-120b",
             },
         }
+
         # Default model
         self.current_model_name = "llama-3.3-70b-versatile"
 
@@ -69,17 +71,7 @@ class LLMOrchestrator:
         max_tokens: int = 1024,
     ) -> str:
         """
-        Generate a response from the selected Groq chat model.
-
-        Args:
-            prompt: User question or full prompt (when RAG passes context).
-            model_name: Optional override; otherwise uses current_model_name.
-            temperature: Sampling temperature.
-            context: Optional extra context (not required; RAG already inlines context in prompt).
-            max_tokens: Max tokens for completion.
-
-        Returns:
-            Assistant text content.
+        Non-streaming response.
         """
         model_name = model_name or self.current_model_name
         if model_name not in self._models:
@@ -88,22 +80,13 @@ class LLMOrchestrator:
         system_msg = "You are a helpful research assistant."
         if context:
             system_msg += (
-                " Use the provided context to answer the question accurately. "
-                "If the answer cannot be found in the context, say you are not sure."
+                " Use the provided context to answer the question accurately."
+                " If the answer cannot be found in the context, say you are not sure."
             )
 
-        messages = [
-            {"role": "system", "content": system_msg},
-        ]
-
+        messages = [{"role": "system", "content": system_msg}]
         if context:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Context:\n{context}",
-                }
-            )
-
+            messages.append({"role": "system", "content": f"Context:\n{context}"})
         messages.append({"role": "user", "content": prompt})
 
         try:
@@ -122,3 +105,48 @@ class LLMOrchestrator:
         except Exception as e:
             logger.error(f"Groq chat completion error: {e}")
             raise
+
+    def stream_response(
+        self,
+        prompt: str,
+        model_name: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        context: Optional[str] = None,
+    ) -> Iterable[str]:
+        """
+        Streaming response generator (yields deltas).
+
+        Uses Groq streaming chat completions. [web:291]
+        """
+        model_name = model_name or self.current_model_name
+        if model_name not in self._models:
+            raise ValueError(f"Unknown model: {model_name}")
+
+        system_msg = "You are a helpful research assistant."
+        if context:
+            system_msg += (
+                " Use the provided context to answer the question accurately."
+                " If the answer cannot be found in the context, say you are not sure."
+            )
+
+        messages = [{"role": "system", "content": system_msg}]
+        if context:
+            messages.append({"role": "system", "content": f"Context:\n{context}"})
+        messages.append({"role": "user", "content": prompt})
+
+        stream = self.client.chat.completions.create(
+            model=self._models[model_name]["id"],
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+
+        for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content or ""
+            except Exception:
+                delta = ""
+            if delta:
+                yield delta
